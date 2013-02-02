@@ -4,13 +4,14 @@ from cms.api import create_page, create_title
 from cms.apphook_pool import apphook_pool
 from cms.appresolver import (applications_page_check, clear_app_resolvers,
     get_app_patterns)
-from cms.test_utils.testcases import CMSTestCase
+from cms.test_utils.testcases import CMSTestCase, SettingsOverrideTestCase
 from cms.test_utils.util.context_managers import SettingsOverride
 from cms.tests.menu_utils import DumbPageLanguageUrl
 from cms.utils.i18n import force_language
 from django.contrib.auth.models import User
 from django.core.urlresolvers import clear_url_caches, reverse
 import sys
+from cms.models.pagemodel import Page
 
 
 
@@ -111,7 +112,7 @@ class ApphooksTestCase(CMSTestCase):
             apphook_pool.clear()
             hooks = apphook_pool.get_apphooks()
             app_names = [hook[0] for hook in hooks]
-            self.assertEqual(len(hooks), 2)
+            self.assertEqual(len(hooks), 3)
             self.assertIn(NS_APP_NAME, app_names)
             self.assertIn(APP_NAME, app_names)
             apphook_pool.clear()
@@ -291,7 +292,7 @@ class ApphooksTestCase(CMSTestCase):
             apphook_pool.clear()
 
     def test_apphook_breaking_under_home_with_new_path_caching(self):
-        with SettingsOverride(CMS_MODERATOR=False, CMS_PERMISSION=False):
+        with SettingsOverride(CMS_PERMISSION=False):
             home = create_page("home", "nav_playground.html", "en", published=True)
             child = create_page("child", "nav_playground.html", "en", published=True, parent=home)
             # not-home is what breaks stuff, because it contains the slug of the home page
@@ -304,8 +305,48 @@ class ApphooksTestCase(CMSTestCase):
                 url = resolver.reverse('sample-root')
                 self.assertEqual(url, 'child/not-home/subchild/')
 
+    def test_apphook_urlpattern_order(self):
+        # this one includes the actual cms.urls, so it can be tested if
+        # they are loaded in the correct order (the cms page pattern must be last)
+        # (the other testcases replicate the inclusion code and thus don't test this)
+        with SettingsOverride(ROOT_URLCONF='cms.test_utils.project.urls'):
+            self.create_base_structure(APP_NAME, 'en')
+            path = reverse('extra_second')
+            response = self.client.get(path)
+            self.assertEquals(response.status_code, 200)
+            self.assertTemplateUsed(response, 'sampleapp/extra.html')
+            self.assertContains(response, "test included urlconf")
 
-class ApphooksPageLanguageUrlTestCase(CMSTestCase):
+    def test_apphooks_receive_url_params(self):
+        # make sure that urlparams actually reach the apphook views
+        with SettingsOverride(ROOT_URLCONF='cms.test_utils.project.urls'):
+            self.create_base_structure(APP_NAME, 'en')
+            path = reverse('sample-params', kwargs=dict(my_params='is-my-param-really-in-the-context-QUESTIONMARK'))
+            response = self.client.get(path)
+            self.assertEquals(response.status_code, 200)
+            self.assertTemplateUsed(response, 'sampleapp/home.html')
+            self.assertContains(response, 'my_params: is-my-param-really-in-the-context-QUESTIONMARK')
+
+    def test_multiple_apphooks(self):
+        # test for #1538
+        with SettingsOverride(ROOT_URLCONF='cms.test_utils.project.third_urls_for_apphook_tests'):
+            apphook_pool.clear()
+            superuser = User.objects.create_superuser('admin', 'admin@admin.com', 'admin')
+            home_page = create_page("home", "nav_playground.html", "en", created_by=superuser, published=True,)
+            apphook1_page = create_page("apphook1-page", "nav_playground.html", "en",
+                created_by=superuser, published=True, apphook="SampleApp")
+            apphook2_page = create_page("apphook2-page", "nav_playground.html", "en",
+                created_by=superuser, published=True, apphook="SampleApp2")
+
+            reverse('sample-root')
+            reverse('sample2-root')
+
+            apphook_pool.clear()
+
+
+class ApphooksPageLanguageUrlTestCase(SettingsOverrideTestCase):
+
+    settings_overrides = {'ROOT_URLCONF': 'cms.test_utils.project.second_urls_for_apphook_tests'}
 
     def setUp(self):
         clear_app_resolvers()
@@ -323,47 +364,47 @@ class ApphooksPageLanguageUrlTestCase(CMSTestCase):
 
     def test_page_language_url_for_apphook(self):
 
-        with SettingsOverride(ROOT_URLCONF='cms.test_utils.project.second_urls_for_apphook_tests'):
+        apphook_pool.clear()
+        superuser = User.objects.create_superuser('admin', 'admin@admin.com', 'admin')
+        page = create_page("home", "nav_playground.html", "en",
+                           created_by=superuser)
+        create_title('de', page.get_title(), page)
+        page.publish()
 
-            apphook_pool.clear()
-            superuser = User.objects.create_superuser('admin', 'admin@admin.com', 'admin')
-            page = create_page("home", "nav_playground.html", "en",
-                               created_by=superuser, published=True)
-            create_title('de', page.get_title(), page)
-            child_page = create_page("child_page", "nav_playground.html", "en",
-                         created_by=superuser, published=True, parent=page)
-            create_title('de', child_page.get_title(), child_page)
-            child_child_page = create_page("child_child_page", "nav_playground.html",
-                "en", created_by=superuser, published=True, parent=child_page, apphook='SampleApp')
-            create_title("de", '%s_de' % child_child_page.get_title(), child_child_page, apphook='SampleApp')
+        child_page = create_page("child_page", "nav_playground.html", "en",
+                     created_by=superuser, parent=page)
+        create_title('de', child_page.get_title(), child_page)
+        child_page.publish()
 
-            child_page.publish()
-            child_child_page.publish()
-            # publisher_public is set to draft on publish, issue with onetoone reverse
-            child_child_page = self.reload(child_child_page)
-            with force_language("en"):
-                path = reverse('extra_first')
+        child_child_page = create_page("child_child_page", "nav_playground.html",
+            "en", created_by=superuser, parent=child_page, apphook='SampleApp')
+        create_title("de", '%s_de' % child_child_page.get_title(), child_child_page, apphook='SampleApp')
+        child_child_page.publish()
 
-            request = self.get_request(path)
-            request.LANGUAGE_CODE = 'en'
-            request.current_page = child_child_page
+        # publisher_public is set to draft on publish, issue with onetoone reverse
+        child_child_page = self.reload(child_child_page)
+        with force_language("en"):
+            path = reverse('extra_first')
 
-            fake_context = {'request': request}
-            tag = DumbPageLanguageUrl()
+        request = self.get_request(path)
+        request.LANGUAGE_CODE = 'en'
+        request.current_page = child_child_page
 
-            output = tag.get_context(fake_context, 'en')
-            url = output['content']
-            self.assertEqual(url, '/en/child_page/child_child_page/extra_1/')
+        fake_context = {'request': request}
+        tag = DumbPageLanguageUrl()
 
+        output = tag.get_context(fake_context, 'en')
+        url = output['content']
 
+        self.assertEqual(url, '/en/child_page/child_child_page/extra_1/')
 
-            output = tag.get_context(fake_context, 'de')
-            url = output['content']
-            # look the extra "_de"
-            self.assertEqual(url, '/de/child_page/child_child_page_de/extra_1/')
+        output = tag.get_context(fake_context, 'de')
+        url = output['content']
+        # look the extra "_de"
+        self.assertEqual(url, '/de/child_page/child_child_page_de/extra_1/')
 
-            output = tag.get_context(fake_context, 'fr')
-            url = output['content']
-            self.assertEqual(url, '/fr/child_page/child_child_page/extra_1/')
+        output = tag.get_context(fake_context, 'fr')
+        url = output['content']
+        self.assertEqual(url, '/fr/child_page/child_child_page/extra_1/')
 
-            apphook_pool.clear()
+        apphook_pool.clear()

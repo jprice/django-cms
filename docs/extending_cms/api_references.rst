@@ -121,7 +121,7 @@ Functions and constants
     :param boolean grant_all: Grant all permissions to the user
 
 
-.. function:: assign_user_to_page(page, user, grant_on=ACCESS_PAGE_AND_DESCENDANTS, can_add=False, can_change=False, can_delete=False, can_change_advanced_settings=False, can_publish=False, can_change_permissions=False, can_move_page=False, can_moderate=False, grant_all=False)
+.. function:: assign_user_to_page(page, user, grant_on=ACCESS_PAGE_AND_DESCENDANTS, can_add=False, can_change=False, can_delete=False, can_change_advanced_settings=False, can_publish=False, can_change_permissions=False, can_move_page=False, grant_all=False)
     
     Assigns a user to a page and gives them some permissions. Returns the 
     :class:`cms.models.permissionmodels.PagePermission` object that gets
@@ -132,7 +132,7 @@ Functions and constants
     :param user: The user to assign to the page
     :type user: :class:`django.contrib.auth.models.User` instance
     :param grant_on: Controls which pages are affected
-    :type grant_on: :data:`cms.models.moderatormodels.ACCESS_PAGE`, :data:`cms.models.moderatormodels.ACCESS_CHILDREN`, :data:`cms.models.moderatormodels.ACCESS_DESCENDANTS` or :data:`cms.models.moderatormodels.ACCESS_PAGE_AND_DESCENDANTS`
+    :type grant_on: :data:`cms.models.permissionmodels.ACCESS_PAGE`, :data:`cms.models.permissionmodels.ACCESS_CHILDREN`, :data:`cms.models.permissionmodels.ACCESS_DESCENDANTS` or :data:`cms.models.permissionmodels.ACCESS_PAGE_AND_DESCENDANTS`
     :param can_*: Permissions to grant
     :param boolean grant_all: Grant all permissions to the user
     
@@ -169,6 +169,19 @@ add a text plugin with the content ``'hello world'``. This is done in English::
     page = create_page('My Page', 'my_template.html', 'en')
     placeholder = page.placeholders.get(slot='body')
     add_plugin(placeholder, 'TextPlugin', 'en', body='hello world')
+
+
+*************
+cms.constants
+*************
+
+.. module:: cms.constants
+
+.. data:: TEMPLATE_INHERITANCE_MAGIC
+
+    The token used to identify when a user selects "inherit" as template for a
+    page.
+
 
 
 ***************

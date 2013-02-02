@@ -110,7 +110,7 @@ CMS.$(document).ready(function ($) {
 			// for that we create an iframe with the specific url
 			var iframe = $('<iframe />', {
 				'id': 'cms_placeholder-iframe',
-				'src': url + placeholder_id + '/edit-plugin/' + plugin_id + '?popup=true&no_preview',
+				'src': url + placeholder_id + '/edit-plugin/' + plugin_id + '/?popup=true&no_preview',
 				'style': 'width:100%; height:0; border:none; overflow:auto;',
 				'allowtransparency': true,
 				'scrollbars': 'no',
@@ -189,7 +189,13 @@ CMS.$(document).ready(function ($) {
 			// save reference to this class
 			var that = this;
 			// get all siblings within the placeholder
-			var holders = plugin.siblings('.cms_placeholder').andSelf();
+            var plugin_id = $(plugin).attr('id').split("-")[1];
+            var multi = $('#cms_placeholder_multi-'+plugin_id)
+            if(multi.length > 0) {
+                plugin = multi
+            }
+
+			var holders = plugin.siblings('.cms_moveable').andSelf();
 			// get selected index and bound
 			var index = holders.index(plugin);
 			var bound = holders.length;
@@ -204,6 +210,10 @@ CMS.$(document).ready(function ($) {
 			var array = [];
 
 			holders.each(function (index, item) {
+                if($(item).hasClass('cms_multi')) {
+                    var item_id = $(item).attr('id').split("-")[1];
+                    var item = $('#cms_placeholder-'+item_id)
+                }
 				array.push($(item).data('options').plugin_id);
 			});
 			// remove current array
@@ -232,11 +242,29 @@ CMS.$(document).ready(function ($) {
 
 			// lets refresh the elements in the dom as well
 			function refreshPluginPosition() {
-				if(dir === 'moveup' && index !== bound+1) plugin.insertBefore($(holders[index-1]));
-				if(dir === 'movedown' && index !== -1) plugin.insertAfter($(holders[index+1]));
+				var target;
+				var before = false;
+				if(dir === 'moveup' && index !== bound+1){
+					before = true;
+					target = $(holders[index-1]);
+				}
+				if(dir === 'movedown' && index !== -1){
+					target = $(holders[index+1]);
+				}
 				// move in or out of boundary
-				if(dir === 'moveup' && index === bound+1) plugin.insertAfter($(holders[index-2]));
-				if(dir === 'movedown' && index === -1) plugin.insertBefore($(holders[index+1]));
+				if(dir === 'moveup' && index === bound+1){
+					 target = $(holders[index-2]);
+				}
+				if(dir === 'movedown' && index === -1){
+					target = $(holders[index+1]);
+					before = true;
+				} 
+				var target_id = target.attr('id').split("-")[1];
+				if(before){
+					plugin.insertBefore(target);
+				}else{
+					plugin.insertAfter(target);
+				}
 
 				// close overlay
 				that.hideOverlay();

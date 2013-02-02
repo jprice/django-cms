@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import with_statement
 from cms.api import create_page, publish_page, add_plugin
-from cms.conf.patch import post_patch_check
 from cms.exceptions import PluginAlreadyRegistered, PluginNotRegistered
 from cms.models import Page, Placeholder
 from cms.models.pluginmodel import CMSPlugin, PluginModelBase
@@ -19,7 +18,7 @@ from cms.plugins.twitter.models import TwitterRecentEntries
 from cms.test_utils.project.pluginapp.models import Article, Section
 from cms.test_utils.project.pluginapp.plugins.manytomany_rel.models import (
     ArticlePluginModel)
-from cms.test_utils.testcases import (CMSTestCase, URL_CMS_PAGE,
+from cms.test_utils.testcases import (CMSTestCase, URL_CMS_PAGE, URL_CMS_PLUGIN_MOVE,
     URL_CMS_PAGE_ADD, URL_CMS_PLUGIN_ADD, URL_CMS_PLUGIN_EDIT, URL_CMS_PAGE_CHANGE, URL_CMS_PLUGIN_REMOVE, URL_CMS_PLUGIN_HISTORY_EDIT)
 from cms.sitemaps.cms_sitemap import CMSSitemap
 from cms.test_utils.util.context_managers import SettingsOverride
@@ -35,6 +34,7 @@ from django.forms.widgets import Media
 from django.test.testcases import TestCase
 import os
 import datetime
+from cms.utils.permissions import set_current_user
 
 
 class DumbFixturePlugin(CMSPluginBase):
@@ -42,6 +42,7 @@ class DumbFixturePlugin(CMSPluginBase):
     name = "Dumb Test Plugin. It does nothing."
     render_template = ""
     admin_preview = False
+    allow_children = True
 
     def render(self, context, instance, placeholder):
         return context
@@ -169,7 +170,7 @@ class PluginsTestCase(PluginsTestBaseCase):
         db_plugin_1 = CMSPlugin.objects.get(pk=text_plugin_1.pk)
         db_plugin_2 = CMSPlugin.objects.get(pk=text_plugin_2.pk)
 
-        with SettingsOverride(CMS_MODERATOR=False, CMS_PERMISSION=False):
+        with SettingsOverride(CMS_PERMISSION=False):
             self.assertEqual(text_plugin_1.position, 1)
             self.assertEqual(db_plugin_1.position, 1)
             self.assertEqual(text_plugin_2.position, 2)
@@ -292,7 +293,7 @@ class PluginsTestCase(PluginsTestBaseCase):
         self.assertEqual(CMSPlugin.objects.count(), 2)
 
         # copy the plugins to the german placeholder
-        copy_plugins_to(ph_en.cmsplugin_set.all(), ph_de, 'de')
+        copy_plugins_to(ph_en.get_plugins(), ph_de, 'de')
 
         self.assertEqual(ph_de.cmsplugin_set.filter(parent=None).count(), 1)
         text_plugin_de = ph_de.cmsplugin_set.get(parent=None).get_plugin_instance()[0]
@@ -371,10 +372,12 @@ class PluginsTestCase(PluginsTestBaseCase):
 
         # there should be only 1 plugin
         self.assertEquals(CMSPlugin.objects.all().count(), 1)
+        self.assertEquals(CMSPlugin.objects.filter(placeholder__page__publisher_is_draft=True).count(), 1)
 
         # publish page
         response = self.client.post(URL_CMS_PAGE + "%d/change-status/" % page.pk, {1 :1})
         self.assertEqual(response.status_code, 200)
+        self.assertEquals(Page.objects.count(), 2)
 
         # there should now be two plugins - 1 draft, 1 public
         self.assertEquals(CMSPlugin.objects.all().count(), 2)
@@ -388,7 +391,8 @@ class PluginsTestCase(PluginsTestBaseCase):
         self.assertEquals(response.status_code, 200)
 
         # there should be no plugins
-        self.assertEquals(CMSPlugin.objects.all().count(), 0)
+        self.assertEquals(CMSPlugin.objects.all().count(), 1)
+        self.assertEquals(CMSPlugin.objects.filter(placeholder__page__publisher_is_draft=False).count(), 1)
 
     def test_remove_plugin_not_associated_to_page(self):
         """
@@ -460,41 +464,42 @@ class PluginsTestCase(PluginsTestBaseCase):
         """
         Test case for InheritPagePlaceholder
         """
-        with SettingsOverride(CMS_MODERATOR=False):
-            inheritfrompage = create_page('page to inherit from',
-                                          'nav_playground.html',
-                                          'en')
+        inheritfrompage = create_page('page to inherit from',
+                                      'nav_playground.html',
+                                      'en')
 
-            body = inheritfrompage.placeholders.get(slot="body")
+        body = inheritfrompage.placeholders.get(slot="body")
 
-            plugin = TwitterRecentEntries(
-                plugin_type='TwitterRecentEntriesPlugin',
-                placeholder=body,
-                position=1,
-                language=settings.LANGUAGE_CODE,
-                twitter_user='djangocms',
-            )
-            plugin.insert_at(None, position='last-child', save=True)
+        plugin = TwitterRecentEntries(
+            plugin_type='TwitterRecentEntriesPlugin',
+            placeholder=body,
+            position=1,
+            language=settings.LANGUAGE_CODE,
+            twitter_user='djangocms',
+        )
+        plugin.insert_at(None, position='last-child', save=True)
+        inheritfrompage.publish()
 
-            page = create_page('inherit from page',
-                               'nav_playground.html',
-                               'en',
-                               published=True)
+        page = create_page('inherit from page',
+                           'nav_playground.html',
+                           'en',
+                           published=True)
 
-            inherited_body = page.placeholders.get(slot="body")
+        inherited_body = page.placeholders.get(slot="body")
 
-            inherit_plugin = InheritPagePlaceholder(
-                plugin_type='InheritPagePlaceholderPlugin',
-                placeholder=inherited_body,
-                position=1,
-                language=settings.LANGUAGE_CODE,
-                from_page=inheritfrompage,
-                from_language=settings.LANGUAGE_CODE)
-            inherit_plugin.insert_at(None, position='last-child', save=True)
+        inherit_plugin = InheritPagePlaceholder(
+            plugin_type='InheritPagePlaceholderPlugin',
+            placeholder=inherited_body,
+            position=1,
+            language=settings.LANGUAGE_CODE,
+            from_page=inheritfrompage,
+            from_language=settings.LANGUAGE_CODE)
+        inherit_plugin.insert_at(None, position='last-child', save=True)
+        page.publish()
 
-            self.client.logout()
-            response = self.client.get(page.get_absolute_url())
-            self.assertTrue('%scms/js/libs/jquery.tweet.js' % settings.STATIC_URL in response.content, response.content)
+        self.client.logout()
+        response = self.client.get(page.get_absolute_url())
+        self.assertTrue('%scms/js/libs/jquery.tweet.js' % settings.STATIC_URL in response.content, response.content)
 
     def test_inherit_plugin_with_empty_plugin(self):
         inheritfrompage = create_page('page to inherit from',
@@ -602,7 +607,7 @@ class PluginsTestCase(PluginsTestBaseCase):
 
         plugin.body = plugin_tags_to_admin_html(' {{ plugin_object %s }} {{ plugin_object %s }} ' % (str(plugin_ref_1.pk), str(plugin_ref_2.pk)))
         plugin.save()
-        self.assertEquals(plugin.pk, 1)
+
         page_data = self.get_new_page_data()
 
         #create 2nd language page
@@ -630,10 +635,10 @@ class PluginsTestCase(PluginsTestBaseCase):
         self.assertEquals(CMSPlugin.objects.filter(language=self.FIRST_LANG).count(), 3)
         self.assertEquals(CMSPlugin.objects.filter(language=self.SECOND_LANG).count(), 3)
         self.assertEquals(CMSPlugin.objects.count(), 6)
-
-        new_plugin = Text.objects.get(pk=6)
+        plugins = list(Text.objects.all())
+        new_plugin = plugins[-1]
         idlist = sorted(plugin_tags_to_id_list(new_plugin.body))
-        expected = sorted([4, 5])
+        expected = sorted([plugins[3].pk, plugins[4].pk])
         self.assertEquals(idlist, expected)
 
     def test_empty_plugin_is_ignored(self):
@@ -664,7 +669,34 @@ class PluginsTestCase(PluginsTestBaseCase):
         plugin = self._edit_text_plugin(plugin_id, "fnord")
 
         actual_last_modification_time = CMSSitemap().lastmod(page)
-        self.assertEqual(plugin.changed_date, actual_last_modification_time)
+        self.assertEqual(plugin.changed_date - datetime.timedelta(microseconds=plugin.changed_date.microsecond), actual_last_modification_time - datetime.timedelta(microseconds=actual_last_modification_time.microsecond))
+
+    def test_moving_plugin_to_different_placeholder(self):
+        plugin_pool.register_plugin(DumbFixturePlugin)
+        page = create_page("page", "nav_playground.html", "en", published=True)
+        plugin_data = {
+            'plugin_type': 'DumbFixturePlugin',
+            'language': settings.LANGUAGES[0][0],
+            'placeholder': page.placeholders.get(slot='body').pk,
+            }
+        response = self.client.post(URL_CMS_PLUGIN_ADD % page.pk, plugin_data)
+        self.assertEquals(response.status_code, 200)
+
+        plugin_data['parent_id'] = int(response.content)
+        del plugin_data['placeholder']
+        response = self.client.post(URL_CMS_PLUGIN_ADD % page.pk, plugin_data)
+        self.assertEquals(response.status_code, 200)
+
+        post = {
+            'plugin_id': int(response.content),
+            'placeholder': 'right-column',
+        }
+        response = self.client.post(URL_CMS_PLUGIN_MOVE % page.pk, post)
+        self.assertEquals(response.status_code, 200)
+
+        from cms.plugins.utils import build_plugin_tree
+        build_plugin_tree(page.placeholders.get(slot='right-column').get_plugins_list())
+        plugin_pool.unregister_plugin(DumbFixturePlugin)
 
 
 class FileSystemPluginTests(PluginsTestBaseCase):
@@ -735,6 +767,7 @@ class PluginManyToManyTestCase(PluginsTestBaseCase):
 
     def test_add_plugin_with_m2m(self):
         # add a new text plugin
+        self.assertEqual(ArticlePluginModel.objects.count(), 0)
         page_data = self.get_new_page_data()
         self.client.post(URL_CMS_PAGE_ADD, page_data)
         page = Page.objects.all()[0]
@@ -762,8 +795,10 @@ class PluginManyToManyTestCase(PluginsTestBaseCase):
         self.assertEquals(self.section_count, plugin.sections.count())
 
     def test_add_plugin_with_m2m_and_publisher(self):
+        self.assertEqual(ArticlePluginModel.objects.count(), 0)
         page_data = self.get_new_page_data()
-        self.client.post(URL_CMS_PAGE_ADD, page_data)
+        response = self.client.post(URL_CMS_PAGE_ADD, page_data)
+        self.assertEqual(response.status_code, 302)
         page = Page.objects.all()[0]
         placeholder = page.placeholders.get(slot="body")
 
@@ -802,6 +837,7 @@ class PluginManyToManyTestCase(PluginsTestBaseCase):
         page = publish_page(page, self.super_user)
 
         # there should now be two plugins - 1 draft, 1 public
+        self.assertEquals(2, CMSPlugin.objects.all().count())
         self.assertEquals(2, ArticlePluginModel.objects.all().count())
 
         db_counts = [plugin.sections.count() for plugin in ArticlePluginModel.objects.all()]
@@ -927,14 +963,6 @@ class PluginsMetaOptionsTests(TestCase):
         plugin = TestPlugin5()
         self.assertEqual(plugin._meta.db_table, 'or_another')
         self.assertEqual(plugin._meta.app_label, 'one_thing')
-
-class SekizaiTests(TestCase):
-    def test_post_patch_check(self):
-        post_patch_check()
-
-    def test_fail(self):
-        with SettingsOverride(CMS_TEMPLATES=[('fail.html', 'fail')]):
-            self.assertRaises(ImproperlyConfigured, post_patch_check)
 
 
 class LinkPluginTestCase(PluginsTestBaseCase):
